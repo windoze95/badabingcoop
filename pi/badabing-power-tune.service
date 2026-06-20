@@ -1,0 +1,34 @@
+# /etc/systemd/system/badabing-power-tune.service
+#
+# Re-apply the RUNTIME power tweaks (LEDs off, HDMI off, BT off) on every boot.
+# The persistent config.txt changes are applied once with:
+#   sudo /usr/local/bin/badabing-power-tune.sh --persist && sudo reboot
+#
+# Install:
+#   sudo cp pi/badabing-power-tune.service /etc/systemd/system/
+#   sudo cp pi/badabing-power-tune.sh /usr/local/bin/ && sudo chmod +x /usr/local/bin/badabing-power-tune.sh
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now badabing-power-tune.service
+
+[Unit]
+Description=Bada Bing power tuning (LEDs/HDMI/BT off) for solar coop cam
+# Do NOT order After=multi-user.target while also being WantedBy=multi-user.target:
+# multi-user.target is only "reached" once everything it wants has started, so a
+# unit that is part of it must not order itself after it -- systemd would push
+# this to the very end of boot (and tear it down first on shutdown), defeating
+# the point of killing the LEDs/HDMI early. Anchor to sysinit.target instead:
+# /sys (LED sysfs) is populated and the manager + D-Bus are up by then, which the
+# runtime_misc() systemctl is-enabled/stop/disable calls need.
+After=sysinit.target
+# (Do NOT pull in systemd-udev-settle.service -- it is deprecated and a no-op on
+#  current systemd. The LED class nodes under /sys/class/leds are populated by
+#  the kernel well before sysinit.target is reached, and the script already
+#  tolerates a missing/empty leds dir, so no settle barrier is needed.)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/badabing-power-tune.sh --runtime
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target

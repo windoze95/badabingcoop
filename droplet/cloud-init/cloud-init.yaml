@@ -1,0 +1,439 @@
+#cloud-config
+# =============================================================================
+# cloud-init for the chicken-cam public proxy droplet.
+# Target: Ubuntu 24.04 LTS (DigitalOcean image: ubuntu-24-04-x64).
+#
+# Provision flow this performs on first boot:
+#   1. Create an admin user with your SSH key (no password).
+#   2. Install nginx, certbot, wireguard, fail2ban, ufw, apache2-utils.
+#   3. Download + install the pinned MediaMTX release as a dedicated user.
+#   4. Drop in all config files (placeholders you MUST fill: keys, domain, IP).
+#   5. Apply SSH hardening, ufw rules, fail2ban, and enable services.
+#
+# IMPORTANT: this file contains placeholders (REPLACE_WITH_*). Fill them before
+# first boot, or fill them after and re-run the relevant steps. WireGuard keys
+# and the public reserved IP are best injected via Terraform templatefile().
+# =============================================================================
+
+# --- Users -------------------------------------------------------------------
+users:
+  - name: chickenadmin
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    lock_passwd: true
+    ssh_authorized_keys:
+      - REPLACE_WITH_YOUR_SSH_PUBLIC_KEY   # ssh-ed25519 AAAA... you@host
+
+# Dedicated unprivileged service account for MediaMTX.
+# (created via runcmd so we can set a nologin shell + no home writes)
+
+package_update: true
+package_upgrade: true
+packages:
+  - nginx
+  - certbot
+  - python3-certbot-nginx
+  - wireguard
+  - wireguard-tools
+  - ufw
+  - fail2ban
+  - apache2-utils      # provides htpasswd
+  - curl
+  - ca-certificates
+  - unattended-upgrades
+
+# --- Files (configs). Replace placeholders before/after boot. -----------------
+write_files:
+  # ---- WireGuard server config ----
+  - path: /etc/wireguard/wg0.conf
+    owner: root:root
+    permissions: '0600'
+    content: |
+      [Interface]
+      Address = 10.10.0.1/24
+      ListenPort = 51820
+      PrivateKey = REPLACE_WITH_SERVER_PRIVATE_KEY
+      SaveConfig = false
+
+      [Peer]
+      PublicKey = REPLACE_WITH_PI_PUBLIC_KEY
+      # PresharedKey = REPLACE_WITH_PRESHARED_KEY
+      AllowedIPs = 10.10.0.2/32
+
+  # ---- MediaMTX config (see droplet/mediamtx/mediamtx.yml for the annotated
+  #      master copy; keep them in sync). ----
+  - path: /usr/local/etc/mediamtx.yml
+    owner: root:root
+    permissions: '0644'
+    content: |
+      logLevel: info
+      logDestinations: [stdout]
+      readTimeout: 10s
+      writeTimeout: 10s
+      writeQueueSize: 512
+      udpMaxPayloadSize: 1452
+      authMethod: internal
+      authInternalUsers:
+        - user: chickenpi
+          pass: REPLACE_WITH_PI_PUBLISH_PASSWORD
+          ips: ["10.10.0.0/24"]
+          permissions:
+            - action: publish
+              path: coop
+        - user: any
+          pass:
+          ips: ["127.0.0.1", "::1"]
+          permissions:
+            - action: read
+              path: coop
+            - action: playback
+              path: coop
+        - user: any
+          pass:
+          ips: ["127.0.0.1", "::1"]
+          permissions:
+            - action: api
+            - action: metrics
+            - action: pprof
+      api: yes
+      apiAddress: 127.0.0.1:9997
+      metrics: no
+      pprof: no
+      playback: no
+      rtsp: yes
+      rtspTransports: [tcp, udp]
+      rtspAddress: 10.10.0.1:8554
+      rtpAddress: 10.10.0.1:8000
+      rtcpAddress: 10.10.0.1:8001
+      rtspEncryption: "no"
+      rtspAuthMethods: [basic]
+      rtmp: no
+      hls: yes
+      hlsAddress: 127.0.0.1:8888
+      hlsEncryption: no
+      hlsAllowOrigins: ["*"]
+      hlsTrustedProxies: ["127.0.0.1/32", "::1/128"]
+      hlsVariant: lowLatency
+      hlsAlwaysRemux: no
+      hlsSegmentCount: 7
+      hlsSegmentDuration: 1s
+      hlsPartDuration: 200ms
+      hlsSegmentMaxSize: 50M
+      webrtc: yes
+      webrtcAddress: 127.0.0.1:8889
+      webrtcEncryption: no
+      webrtcAllowOrigins: ["*"]
+      webrtcTrustedProxies: ["127.0.0.1/32", "::1/128"]
+      webrtcLocalUDPAddress: :8189
+      webrtcLocalTCPAddress: ""
+      webrtcIPsFromInterfaces: no
+      webrtcAdditionalHosts: ["REPLACE_WITH_DROPLET_RESERVED_IP"]
+      webrtcICEServers2:
+        - url: stun:stun.l.google.com:19302
+          username: ""
+          password: ""
+          clientOnly: false
+      srt: no
+      pathDefaults:
+        source: publisher
+        sourceOnDemand: no
+        record: no
+      paths:
+        coop:
+          source: publisher
+          sourceOnDemand: no
+
+  # ---- MediaMTX systemd unit ----
+  - path: /etc/systemd/system/mediamtx.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=MediaMTX media server (chicken-cam proxy)
+      After=network-online.target wg-quick@wg0.service
+      Wants=network-online.target
+      Requires=wg-quick@wg0.service
+      StartLimitIntervalSec=60
+      StartLimitBurst=5
+
+      [Service]
+      Type=simple
+      User=mediamtx
+      Group=mediamtx
+      ExecStart=/usr/local/bin/mediamtx /usr/local/etc/mediamtx.yml
+      Restart=on-failure
+      RestartSec=2
+      NoNewPrivileges=true
+      PrivateTmp=true
+      ProtectSystem=strict
+      ProtectHome=true
+      ProtectKernelTunables=true
+      ProtectKernelModules=true
+      ProtectControlGroups=true
+      RestrictSUIDSGID=true
+      RestrictRealtime=true
+      LockPersonality=true
+      MemoryDenyWriteExecute=true
+      SystemCallArchitectures=native
+      ReadOnlyPaths=/usr/local/etc/mediamtx.yml
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+      CapabilityBoundingSet=
+      AmbientCapabilities=
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # ---- WireGuard restart drop-in ----
+  - path: /etc/systemd/system/wg-quick@wg0.service.d/override.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      After=network-online.target nss-lookup.target
+      Wants=network-online.target
+      [Service]
+      Restart=on-failure
+      RestartSec=5
+
+  # ---- SSH hardening ----
+  - path: /etc/ssh/sshd_config.d/99-hardening.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      PubkeyAuthentication yes
+      PermitEmptyPasswords no
+      AllowUsers chickenadmin coopstatus
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding no
+      PermitTunnel no
+      MaxAuthTries 3
+      MaxSessions 4
+      LoginGraceTime 20
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+      TCPKeepAlive no
+      UseDNS no
+      KexAlgorithms sntrup761x25519-sha512@openssh.com,curve25519-sha256,curve25519-sha256@libssh.org
+      Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+      MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+      LogLevel VERBOSE
+
+  # ---- fail2ban ----
+  - path: /etc/fail2ban/jail.local
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [DEFAULT]
+      backend = systemd
+      bantime  = 1h
+      findtime = 10m
+      maxretry = 5
+      ignoreip = 127.0.0.1/8 ::1 10.10.0.0/24
+      banaction = ufw
+      banaction_allports = ufw
+      [sshd]
+      enabled = true
+      port = 22
+      filter = sshd
+      maxretry = 3
+      bantime = 2h
+      mode = aggressive
+      [nginx-http-auth]
+      enabled = true
+      port = http,https
+      filter = nginx-http-auth
+      logpath = /var/log/nginx/error.log
+      maxretry = 5
+      bantime = 1h
+      [nginx-botsearch]
+      enabled = true
+      port = http,https
+      filter = nginx-botsearch
+      logpath = /var/log/nginx/access.log
+      maxretry = 8
+      bantime = 1h
+      [recidive]
+      enabled = true
+      logpath = /var/log/fail2ban.log
+      banaction = ufw
+      bantime = 1w
+      findtime = 1d
+      maxretry = 3
+
+  # ---- nginx site (annotated master at droplet/nginx/coop.conf) ----
+  - path: /etc/nginx/sites-available/coop.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      server {
+          listen 80;
+          listen [::]:80;
+          server_name cam.example.com;
+          location /.well-known/acme-challenge/ { root /var/www/html; allow all; }
+          location / { return 301 https://$host$request_uri; }
+      }
+      server {
+          listen 443 ssl http2;
+          listen [::]:443 ssl http2;
+          server_name cam.example.com;
+          ssl_certificate     /etc/letsencrypt/live/cam.example.com/fullchain.pem;
+          ssl_certificate_key /etc/letsencrypt/live/cam.example.com/privkey.pem;
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_prefer_server_ciphers off;
+          ssl_session_cache shared:SSL:10m;
+          ssl_session_tickets off;
+          # add_header Strict-Transport-Security "max-age=63072000" always;  # enable only after HTTPS is confirmed working
+          add_header X-Content-Type-Options "nosniff" always;
+          add_header Referrer-Policy "no-referrer" always;
+          # --- Viewer is PUBLIC (no login), by explicit choice. -------------
+          # To re-enable HTTP Basic Auth for the whole site later, UNCOMMENT the
+          # two lines below and create the file:
+          #     sudo htpasswd -c /etc/nginx/.htpasswd_coop viewer
+          # (Leave the /api/ location's `auth_basic off;` intact so the status
+          #  widget stays public even if you gate the video.)
+          # auth_basic           "Chicken Cam";
+          # auth_basic_user_file /etc/nginx/.htpasswd_coop;
+          proxy_http_version 1.1;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+          root /var/www/badabing;
+          index index.html;
+          location = / { try_files /index.html =404; }
+          location = /index.html { try_files /index.html =404; }
+          location = /app.js { default_type application/javascript; try_files /app.js =404; }
+          location = /styles.css { default_type text/css; try_files /styles.css =404; }
+          location /coop/whep {
+              proxy_pass http://127.0.0.1:8889/coop/whep;
+              proxy_buffering off; proxy_request_buffering off;
+          }
+          location /coop/whip { return 403; }
+          location /coop/ {
+              proxy_pass http://127.0.0.1:8888/coop/;
+              proxy_buffering off; proxy_cache off; proxy_read_timeout 30s;
+              # add_header Strict-Transport-Security "max-age=63072000" always;  # enable only after HTTPS is confirmed working
+              add_header X-Content-Type-Options "nosniff" always;
+              add_header Referrer-Policy "no-referrer" always;
+              add_header Cache-Control "no-cache" always;
+          }
+          # PUBLIC status JSON (Pi-pushed to /var/www/badabing/api). Inlined here
+          # (cloud-init is self-contained, so we do NOT include an external
+          # snippet). No auth; short no-cache so the widget always sees fresh data.
+          location /api/ {
+              auth_basic off;
+              root /var/www/badabing;
+              default_type application/json;
+              add_header Cache-Control "no-cache" always;
+              try_files $uri =404;
+          }
+          location / { try_files $uri =404; }
+      }
+
+  # ---- HTTP-only ACME bootstrap vhost ----
+  # We REMOVE the stock default site below, which means sites-enabled is empty
+  # until coop.conf can be enabled (only AFTER the cert exists). With an empty
+  # sites-enabled, nginx's compiled-in default server returns 404 for the ACME
+  # HTTP-01 challenge and certbot --webroot FAILS. This minimal vhost serves
+  # /var/www/html on :80 so the challenge succeeds; it is removed once coop.conf
+  # (which has its own :80 -> :443 redirect + ACME location) takes over.
+  - path: /etc/nginx/sites-available/acme-bootstrap.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          server_name _;
+          root /var/www/html;
+          location /.well-known/acme-challenge/ { root /var/www/html; allow all; }
+          location / { return 404; }
+      }
+
+  # ---- ufw setup script ----
+  - path: /root/ufw-setup.sh
+    owner: root:root
+    permissions: '0700'
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      ufw --force reset
+      ufw default deny incoming
+      ufw default allow outgoing
+      ufw limit 22/tcp comment 'SSH (rate-limited)'
+      ufw allow 80/tcp comment 'HTTP (ACME + redirect)'
+      ufw allow 443/tcp comment 'HTTPS'
+      ufw allow 51820/udp comment 'WireGuard'
+      ufw allow 8189/udp comment 'WebRTC media (SRTP)'
+      ufw deny 8554/tcp comment 'RTSP ingest: WireGuard only'
+      ufw deny 8888/tcp comment 'HLS: localhost only'
+      ufw deny 8889/tcp comment 'WebRTC signaling: localhost only'
+      ufw deny 9997/tcp comment 'MediaMTX API: localhost only'
+      ufw logging low
+      ufw --force enable
+
+# --- Run on first boot -------------------------------------------------------
+runcmd:
+  # MediaMTX version to install (verified latest: v1.19.1, June 2026).
+  - export MTX_VERSION=v1.19.1
+  - export MTX_ARCH=linux_amd64
+  # Create the unprivileged service user.
+  - useradd --system --no-create-home --shell /usr/sbin/nologin mediamtx || true
+  # Download + install the pinned MediaMTX release.
+  - curl -fsSL "https://github.com/bluenviron/mediamtx/releases/download/${MTX_VERSION}/mediamtx_${MTX_VERSION}_${MTX_ARCH}.tar.gz" -o /tmp/mediamtx.tgz
+  - tar -xzf /tmp/mediamtx.tgz -C /tmp mediamtx
+  - install -m 0755 -o root -g root /tmp/mediamtx /usr/local/bin/mediamtx
+  - rm -f /tmp/mediamtx.tgz /tmp/mediamtx /tmp/mediamtx.yml
+  # Web viewer files: deploy your built index.html / app.js / styles.css here.
+  - mkdir -p /var/www/badabing/api /var/www/html
+  # (Upload droplet/web/* to /var/www/badabing via scp/rsync/Terraform file
+  #  provisioner. A placeholder index is written so nginx serves something.)
+  - 'test -f /var/www/badabing/index.html || echo "<h1>Chicken Cam</h1><p>Upload the viewer to /var/www/badabing</p>" > /var/www/badabing/index.html'
+  # Seed a valid placeholder status.json so /api/status.json returns 200 + valid
+  # JSON before the Pi's first push (the Pi later rsyncs the real file in).
+  - 'test -f /var/www/badabing/api/status.json || echo "{ \"schema\": 1, \"host\": null, \"ts\": null, \"stream\": { \"up\": false }, \"music\": { \"playing\": false }, \"battery\": null, \"note\": \"awaiting first push from coop Pi\" }" > /var/www/badabing/api/status.json'
+  - chown -R www-data:www-data /var/www/badabing
+  # The viewer is PUBLIC (no login) by explicit choice, so NO htpasswd file is
+  # created here. To re-enable Basic Auth later: uncomment the two auth_basic
+  # lines in coop.conf and run `htpasswd -c /etc/nginx/.htpasswd_coop viewer`.
+  # nginx: drop the stock default site and enable the HTTP-only ACME bootstrap
+  # vhost instead (so :80 actually serves /var/www/html for the challenge). Do
+  # NOT enable coop.conf yet (its 443 block needs the cert first; see TLS note).
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -sf /etc/nginx/sites-available/acme-bootstrap.conf /etc/nginx/sites-enabled/acme-bootstrap.conf
+  # Firewall first (so we don't expose anything during setup).
+  - bash /root/ufw-setup.sh
+  # Bring up WireGuard, then MediaMTX (which binds to 10.10.0.1).
+  - systemctl daemon-reload
+  - systemctl enable --now wg-quick@wg0
+  - systemctl enable --now mediamtx
+  # SSH + fail2ban.
+  - sshd -t && systemctl reload ssh
+  - systemctl enable --now fail2ban
+  # --- TLS bootstrap (fixes a chicken-and-egg ordering bug) ----------------
+  # coop.conf's 443 server block references
+  # /etc/letsencrypt/live/cam.example.com/fullchain.pem, which does NOT exist on
+  # first boot. If coop.conf were symlinked into sites-enabled now, `nginx -t`
+  # would FAIL and nginx would refuse to start -- so `certbot --nginx` could
+  # never run (it needs a working nginx). We therefore issue the cert with the
+  # webroot challenge first (the acme-bootstrap vhost enabled above serves port
+  # 80 from /var/www/html -- an EMPTY sites-enabled would make nginx 404 the
+  # challenge), THEN swap the bootstrap vhost out for the TLS vhost.
+  - systemctl enable --now nginx        # HTTP-only at this point
+  - mkdir -p /var/www/html/.well-known/acme-challenge
+  # Requires the DNS A record cam.example.com -> droplet reserved IP to be live.
+  - 'certbot certonly --webroot -w /var/www/html --non-interactive --agree-tos -m REPLACE_WITH_YOUR_EMAIL -d cam.example.com || echo "certbot failed (check DNS / port 80); issue the cert and enable coop.conf by hand"'
+  # Only enable the TLS site once the cert files actually exist. Swap the
+  # bootstrap vhost out for coop.conf (coop.conf owns :80 redirect + ACME).
+  - 'test -f /etc/letsencrypt/live/cam.example.com/fullchain.pem && rm -f /etc/nginx/sites-enabled/acme-bootstrap.conf && ln -sf /etc/nginx/sites-available/coop.conf /etc/nginx/sites-enabled/coop.conf'
+  - nginx -t && systemctl reload nginx
+  # certbot ships a systemd renewal timer; make sure it is active.
+  - systemctl enable --now certbot.timer
+
+final_message: "Chicken-cam proxy droplet is up. Fill remaining placeholders (WG keys, domain, passwords) and run certbot if DNS wasn't ready."

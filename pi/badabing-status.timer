@@ -1,0 +1,31 @@
+# /etc/systemd/system/badabing-status.timer
+#
+# Fires badabing-status.service every ~15 seconds. systemd timers can't go below
+# 1s and sub-minute cadence is fine here. We anchor on a monotonic clock so the
+# cadence survives clock steps / NTP jumps, and we let the units overlap-protect
+# themselves (oneshot won't double-run while a previous run is still going).
+#
+# Enable:  sudo systemctl enable --now badabing-status.timer
+# Check:   systemctl list-timers badabing-status.timer
+#          systemctl status badabing-status.timer
+
+[Unit]
+Description=Run the Bada Bing coop status reporter every ~15s
+Documentation=man:systemd.timer(5)
+
+[Timer]
+# First run shortly after boot once things settle.
+OnBootSec=20s
+# Then every 15s, measured from when the LAST run *finished* (UnitActiveSec is
+# based on activation; for a fast oneshot this gives a steady ~15s cadence).
+OnUnitActiveSec=15s
+# Don't pile up missed runs if the Pi was asleep/suspended.
+Persistent=false
+# Small randomised slop so many devices wouldn't sync-hammer the droplet (and to
+# avoid lockstep with other timers). 0-3s jitter on a 15s period is negligible.
+RandomizedDelaySec=3s
+AccuracySec=1s
+Unit=badabing-status.service
+
+[Install]
+WantedBy=timers.target

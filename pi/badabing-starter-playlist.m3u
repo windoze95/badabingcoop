@@ -1,0 +1,43 @@
+#EXTM3U
+# /srv/badabing/playlists/badabing-starter-playlist.m3u
+#
+# The "Bada Bing" classical starter playlist — well-known, crowd-pleasing pieces
+# whose COMPOSITIONS are firmly public domain. (Remember: the RECORDING must also
+# be free — use the Musopen/archive.org CC0 sets from fetch-music.sh, or your own
+# files. The paths below are RELATIVE to MPD's music_directory; they will resolve
+# once you have downloaded/dropped recordings of these pieces with sensible
+# folder names. Adjust the paths to match your actual files, then:
+#     mpc load badabing-starter-playlist
+#     mpc play
+# Or skip the playlist entirely and just let continuous-shuffle play the whole
+# library — badabing-mpd-init.sh does that by default.)
+#
+# This file doubles as a curation guide: even if your filenames differ, it tells
+# you WHICH pieces make a tasteful, recognizable rotation for a relaxed outdoor
+# (chicken-approved) atmosphere — nothing too bombastic or sleep-disrupting.
+#
+# ---- The dozen ----
+#EXTINF:-1,Johann Pachelbel — Canon in D major
+Pachelbel/Canon_in_D.flac
+#EXTINF:-1,Antonio Vivaldi — The Four Seasons, "Spring" (La primavera), I. Allegro
+Vivaldi/Four_Seasons_Spring_1_Allegro.flac
+#EXTINF:-1,Johann Sebastian Bach — Air on the G String (Orchestral Suite No. 3)
+Bach/Air_on_the_G_String.flac
+#EXTINF:-1,Wolfgang Amadeus Mozart — Eine kleine Nachtmusik, I. Allegro
+Mozart/Eine_kleine_Nachtmusik_1_Allegro.flac
+#EXTINF:-1,Claude Debussy — Clair de lune (Suite bergamasque)
+Debussy/Clair_de_Lune.flac
+#EXTINF:-1,Erik Satie — Gymnopédie No. 1
+Satie/Gymnopedie_No_1.flac
+#EXTINF:-1,Frédéric Chopin — Nocturne in E-flat major, Op. 9 No. 2
+Chopin/Nocturne_Op9_No2.flac
+#EXTINF:-1,Ludwig van Beethoven — Symphony No. 7 in A, II. Allegretto
+Beethoven/Symphony_7_2_Allegretto.flac
+#EXTINF:-1,Edvard Grieg — Peer Gynt Suite No. 1, "Morning Mood"
+Grieg/Peer_Gynt_Morning_Mood.flac
+#EXTINF:-1,Camille Saint-Saëns — The Carnival of the Animals, "The Swan" (Le cygne)
+Saint-Saens/The_Swan.flac
+#EXTINF:-1,Gabriel Fauré — Pavane, Op. 50
+Faure/Pavane_Op50.flac
+#EXTINF:-1,Edward Elgar — Salut d'Amour, Op. 12
+Elgar/Salut_dAmour.flac

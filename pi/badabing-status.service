@@ -1,0 +1,65 @@
+# /etc/systemd/system/badabing-status.service
+#
+# Bada Bing coop STATUS reporter (oneshot). Builds /run/badabing/status.json and
+# pushes it to the droplet's nginx web root over WireGuard. Fired by the paired
+# .timer every ~15s — this unit itself just runs once and exits.
+#
+# Install:
+#   sudo cp pi/badabing-status.service /etc/systemd/system/
+#   sudo cp pi/badabing-status.timer   /etc/systemd/system/
+#   sudo cp pi/badabing-status.sh      /usr/local/bin/  && sudo chmod +x /usr/local/bin/badabing-status.sh
+#   sudo cp pi/badabing-ina219.py      /usr/local/bin/  && sudo chmod +x /usr/local/bin/badabing-ina219.py   # optional (battery)
+#   sudo install -d /etc/badabing && sudo cp pi/badabing-status.env /etc/badabing/
+#   sudo install -d -m 0700 /etc/badabing/keys
+#   # generate the deploy keypair (no passphrase so the timer can run unattended):
+#   sudo ssh-keygen -t ed25519 -N '' -C 'coopstatus@coop-pi' -f /etc/badabing/keys/coopstatus_ed25519
+#   sudo chmod 600 /etc/badabing/keys/coopstatus_ed25519
+#   # then put coopstatus_ed25519.pub into the droplet's coopstatus authorized_keys
+#   # (see droplet/ssh/coopstatus.authorized_keys), and:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now badabing-status.timer
+#
+# Watch:  journalctl -u badabing-status.service -f
+
+[Unit]
+Description=Bada Bing coop status reporter (build status.json + push to droplet)
+Documentation=man:rrsync(1)
+# We want to push even if the camera is down, but the tunnel must be up.
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+# Don't hard-Require wg here: a transient WG flap should just make the push fail
+# and retry next tick, NOT mark this unit failed-on-dependency. Ordering is enough.
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/badabing/badabing-status.env
+ExecStart=/usr/local/bin/badabing-status.sh
+
+# Runs as root: needs to read sensors (/proc, I2C), query systemd, and read the
+# 0600 deploy key. Kept tightly sandboxed below.
+User=root
+Group=root
+
+# A single tick must not run forever (e.g. SSH hanging despite ConnectTimeout).
+TimeoutStartSec=45
+
+# --- Light sandboxing --------------------------------------------------------
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# The script writes its staging dir under /run; grant just that path.
+ReadWritePaths=/run/badabing
+RuntimeDirectory=badabing
+RuntimeDirectoryMode=0755
+# I2C access for the optional INA219 reader (harmless if the device is absent).
+DeviceAllow=char-i2c rw
+SupplementaryGroups=i2c
+
+[Install]
+# Not strictly needed (the timer drives it), but harmless and lets you trigger a
+# one-off run with: systemctl start badabing-status.service
+WantedBy=multi-user.target

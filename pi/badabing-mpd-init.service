@@ -1,0 +1,37 @@
+# /etc/systemd/system/badabing-mpd-init.service
+#
+# One-shot: after MPD is up, arm continuous shuffle (random+repeat), load the
+# whole library into the queue, and start playing. Also runs badabing-audio-route
+# so playback lands on the Bluetooth A2DP sink.
+#
+# Install:
+#   sudo cp pi/badabing-mpd-init.sh /usr/local/bin/ && sudo chmod +x /usr/local/bin/badabing-mpd-init.sh
+#   sudo cp pi/badabing-mpd-init.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now badabing-mpd-init.service
+
+[Unit]
+Description=Bada Bing — arm shuffle, load library, start playback (one-shot)
+After=badabing-mpd.service badabing-bt-connect.service badabing-pipewire.service
+Wants=badabing-mpd.service
+# Re-run any time with: sudo systemctl restart badabing-mpd-init.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/badabing/badabing-music.env
+Environment=XDG_RUNTIME_DIR=/run/pipewire
+Environment=PULSE_RUNTIME_PATH=/run/pulse
+# audio-route uses wpctl/pactl against the headless system PipeWire, which is
+# reachable only over its private session bus.
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/pipewire/bus
+# 1) make sure audio is routed to the A2DP speaker (best-effort; may fail if the
+#    speaker is briefly off — the bt-connect loop + this being re-runnable cover
+#    that), then 2) arm shuffle and start playing.
+ExecStart=-/usr/local/bin/badabing-audio-route.sh
+ExecStart=/usr/local/bin/badabing-mpd-init.sh
+User=mpd
+Group=audio
+SupplementaryGroups=audio pipewire bluetooth
+
+[Install]
+WantedBy=multi-user.target

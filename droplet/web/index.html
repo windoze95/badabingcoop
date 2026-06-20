@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="description" content="The Bada Bing — live from the coop. Tony, Adriana, Pussi, and Rorschach, on stage nightly. (It's chickens.)" />
+  <meta name="theme-color" content="#0a0008" />
+  <title>The Bada Bing &mdash; Live Coop Cam</title>
+
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%90%94%3C/text%3E%3C/svg%3E" />
+
+  <!--
+    hls.js loaded from jsDelivr CDN, pinned to an exact version with Subresource
+    Integrity. Hash verified against the CDN-delivered file (sha256 cross-checked
+    against jsDelivr's published hash). If the bytes change, the browser refuses
+    to run the script. `defer` keeps it out of the critical render path; app.js
+    feature-detects window.Hls and degrades to WebRTC-only if it fails to load.
+  -->
+  <script
+    defer
+    src="https://cdn.jsdelivr.net/npm/hls.js@1.6.16/dist/hls.min.js"
+    integrity="sha384-5E8B0pTlZZJMabWpC0fyYf6OUpe15jJij34BqBAh4NXoHAlLNOjCPRrwtOXOQFAn"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"></script>
+</head>
+<body>
+  <div class="scanlines" aria-hidden="true"></div>
+
+  <header class="marquee">
+    <div class="marquee__bulbs" aria-hidden="true"></div>
+    <h1 class="marquee__sign">
+      <span class="marquee__the">The</span>
+      <span class="marquee__bada">Bada</span>
+      <span class="marquee__bing">Bing</span>
+    </h1>
+    <p class="marquee__tag">Gentlemen's Coop &middot; Live Nightly &middot; Two Drink Minimum (of Water)</p>
+
+    <!-- "NOW SPINNING" jukebox ticker — fed by /api/status.json (music object).
+         Defaults to "quiet" until the first successful poll. -->
+    <div class="nowspinning" id="nowSpinning" data-playing="false" aria-live="polite">
+      <span class="nowspinning__label" aria-hidden="true">Now Spinning</span>
+      <span class="nowspinning__track" id="nowSpinningTrack">The jukebox is quiet&hellip;</span>
+    </div>
+  </header>
+
+  <main class="stage">
+    <!-- ===================== STAGE / PLAYER ===================== -->
+    <section class="player" aria-label="Live coop stream">
+      <div class="player__frame">
+        <video
+          id="video"
+          class="player__video"
+          playsinline
+          autoplay
+          muted
+          poster="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='9'%3E%3Crect width='16' height='9' fill='%230a0008'/%3E%3C/svg%3E"></video>
+
+        <!-- Connection status pill (live region for screen readers) -->
+        <div class="status" id="status" role="status" aria-live="polite" data-state="connecting">
+          <span class="status__dot" aria-hidden="true"></span>
+          <span class="status__label" id="statusLabel">Connecting&hellip;</span>
+          <span class="status__mode" id="statusMode"></span>
+        </div>
+
+        <!-- "We're closed" / offline overlay -->
+        <div class="closed" id="closed" hidden>
+          <div class="closed__neon">CLOSED</div>
+          <p class="closed__line">The girls are off the clock.</p>
+          <p class="closed__sub" id="closedSub">Stream is offline. We&rsquo;ll try the door again shortly&hellip;</p>
+          <button type="button" class="btn btn--ghost" id="retryNow">Knock again</button>
+        </div>
+
+        <!-- Tap-to-unmute hint (autoplay policies mute by default) -->
+        <button type="button" class="unmute" id="unmute" hidden aria-label="Unmute the stream">
+          <span aria-hidden="true">&#128263;</span> Tap for sound
+        </button>
+      </div>
+
+      <div class="player__controls">
+        <button type="button" class="btn btn--neon" id="capture" disabled>
+          <span aria-hidden="true">&#128247;</span> Capture the moment
+        </button>
+        <button type="button" class="btn btn--ghost" id="reconnect">
+          <span aria-hidden="true">&#8635;</span> Reconnect
+        </button>
+        <a class="btn btn--ghost btn--hidden" id="downloadLink" download="bada-bing.png" hidden>Save shot</a>
+      </div>
+    </section>
+
+    <!-- ===================== COOP STATUS / HEALTH ===================== -->
+    <!-- Fed by /api/status.json. Independent of the video stream: this reports
+         the Pi's own health telemetry, which can be live even if the stream is
+         down (and vice-versa). Rows degrade gracefully; the battery row stays
+         hidden unless the Pi reports battery telemetry. -->
+    <section class="health" aria-labelledby="healthHeading">
+      <div class="health__head">
+        <h2 class="health__heading" id="healthHeading">Out Back at the Coop</h2>
+        <!-- telemetry freshness indicator: live / stale / offline -->
+        <span class="tele" id="tele" data-tele="unknown" role="status" aria-live="polite">
+          <span class="tele__dot" aria-hidden="true"></span>
+          <span class="tele__label" id="teleLabel">Checking telemetry&hellip;</span>
+        </span>
+      </div>
+
+      <dl class="health__grid">
+        <div class="health-item" id="rowStream">
+          <dt class="health-item__k">Stream</dt>
+          <dd class="health-item__v" id="valStream">&mdash;</dd>
+        </div>
+        <div class="health-item" id="rowSeen">
+          <dt class="health-item__k">Last seen</dt>
+          <dd class="health-item__v" id="valSeen">&mdash;</dd>
+        </div>
+        <div class="health-item" id="rowTemp">
+          <dt class="health-item__k">CPU temp</dt>
+          <dd class="health-item__v" id="valTemp">&mdash;</dd>
+        </div>
+        <div class="health-item" id="rowUptime">
+          <dt class="health-item__k">Uptime</dt>
+          <dd class="health-item__v" id="valUptime">&mdash;</dd>
+        </div>
+        <div class="health-item" id="rowWifi">
+          <dt class="health-item__k">Wi-Fi</dt>
+          <dd class="health-item__v" id="valWifi">&mdash;</dd>
+        </div>
+        <!-- Battery row is hidden until the Pi reports battery telemetry. -->
+        <div class="health-item" id="rowBattery" hidden>
+          <dt class="health-item__k">Battery</dt>
+          <dd class="health-item__v" id="valBattery">&mdash;</dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- ===================== TONIGHT'S CAST ===================== -->
+    <section class="cast" aria-labelledby="castHeading">
+      <h2 class="cast__heading" id="castHeading">Tonight&rsquo;s Cast</h2>
+      <ul class="cast__list">
+        <li class="cast-card cast-card--boss">
+          <div class="cast-card__name">Tony <span class="cast-card__role">The Boss</span></div>
+          <p class="cast-card__bio">
+            Rooster. Runs the joint. Crows at 4:47am sharp because the sun answers to him, not
+            the other way around. Settles disputes over the good dust-bath spot. Do not make eye
+            contact with his hens.
+          </p>
+        </li>
+        <li class="cast-card">
+          <div class="cast-card__name">Adriana</div>
+          <p class="cast-card__bio">
+            Headliner. Speckled, dramatic, lays the biggest eggs and wants everyone to know it.
+            First to the feeder, last to roost. Has opinions about the new mealworms.
+          </p>
+        </li>
+        <li class="cast-card">
+          <div class="cast-card__name">Pussi</div>
+          <p class="cast-card__bio">
+            Bantam with a Napoleon streak. Half the size, twice the attitude. Will fight a
+            squirrel for a single sunflower seed and you will bet on the squirrel and lose.
+          </p>
+        </li>
+        <li class="cast-card">
+          <div class="cast-card__name">Rorschach</div>
+          <p class="cast-card__bio">
+            Inkblot plumage no two people read the same way. Broody, mysterious, keeps to the
+            shadows of the nesting box. Nobody knows what she&rsquo;s thinking. Possibly nothing.
+            Possibly everything.
+          </p>
+        </li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>The Bada Bing &middot; Backyard Coop Productions &middot; No chickens were objectified in the making of this stream</p>
+    <p class="footer__tech" id="techLine">Low-latency WebRTC with HLS fallback.</p>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

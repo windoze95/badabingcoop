@@ -1,0 +1,53 @@
+# =============================================================================
+# systemd unit for MediaMTX (the media server/proxy).
+# Path on droplet: /etc/systemd/system/mediamtx.service
+# Enable: systemctl daemon-reload && systemctl enable --now mediamtx
+#
+# Assumes the binary is at /usr/local/bin/mediamtx and the config at
+# /usr/local/etc/mediamtx.yml (the cloud-init below installs both).
+#
+# Ordering note: MediaMTX binds its RTSP listener to the WireGuard IP
+# (10.10.0.1). That address only exists AFTER wg-quick@wg0 is up, so we depend
+# on it. Without this ordering MediaMTX would fail to bind on a cold boot.
+# =============================================================================
+[Unit]
+Description=MediaMTX media server (chicken-cam proxy)
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+Requires=wg-quick@wg0.service
+# StartLimit* MUST live in [Unit] (systemd >= 230 ignores them in [Service]).
+# It can take a moment for the wg interface address to be assigned; allow a few
+# rapid retries before giving up.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=mediamtx
+Group=mediamtx
+ExecStart=/usr/local/bin/mediamtx /usr/local/etc/mediamtx.yml
+Restart=on-failure
+RestartSec=2
+
+# --- Hardening ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+# MediaMTX needs no write access anywhere for live-only (no recording).
+ReadOnlyPaths=/usr/local/etc/mediamtx.yml
+# Only the ports we actually use; everything else is denied by ufw anyway.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

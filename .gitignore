@@ -1,0 +1,87 @@
+# =============================================================================
+# badabingcoop / The Bada Bing — root .gitignore
+#
+# Goal: protect REAL secrets and generated state, WITHOUT ignoring the shipped
+# placeholder configs the repo needs to function (those carry REPLACE_WITH_*
+# tokens and MUST stay tracked). Rule of thumb:
+#   * shipped placeholders (droplet/wireguard/wg0.conf, *.tfvars.example, the
+#     *.env files with REPLACE_WITH_* values) -> TRACKED.
+#   * anything you fill with a real key/password/IP for an actual deploy -> use
+#     one of the *.local / *.secret / *.filled suffixes below so it is ignored.
+# =============================================================================
+
+# --- Private keys (NEVER commit) --------------------------------------------
+# WireGuard private keys, TLS private keys, and any ssh-keygen ed25519 PRIVATE
+# keys. NOTE: this deliberately does NOT match "*.pub" public keys.
+*.key
+*.pem
+*_ed25519
+# Belt-and-suspenders for common private-key filenames.
+id_rsa
+id_ed25519
+server_private.key
+pi_private.key
+coopstatus_ed25519
+
+# --- Filled secret/config overlays (your real, deploy-specific copies) -------
+# The repo SHIPS placeholder configs (e.g. droplet/wireguard/wg0.conf) on
+# purpose — do NOT ignore those by name. Instead, when you create a REAL filled
+# copy, give it one of these suffixes so it stays out of git:
+#   cp droplet/wireguard/wg0.conf wg0.conf.secret   # then fill in real keys
+*.conf.local
+*.conf.secret
+*.conf.filled
+*.local
+*.secret
+
+# --- Environment files -------------------------------------------------------
+# The shipped reference (.env.example) is tracked; a real, filled .env is not.
+.env
+.env.*
+!.env.example
+
+# --- nginx Basic Auth (OPT-IN; viewer is public by default) ------------------
+.htpasswd*
+
+# --- Terraform state + secrets -----------------------------------------------
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# --- SSH known_hosts (host-specific, machine-local) --------------------------
+known_hosts
+known_hosts.*
+
+# --- Downloaded music library (large, license-specific; never commit) --------
+# fetch-music.sh populates /srv/badabing/music on the Pi; if anyone stages music
+# inside the repo, keep audio + the music/srv trees out of git.
+srv/
+music/
+*.mp3
+*.flac
+*.ogg
+*.opus
+*.m4a
+*.wav
+
+# --- Editor / OS cruft -------------------------------------------------------
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.bak
+*.orig
+*.tmp
+
+# --- JS deps (none today, but harmless) --------------------------------------
+node_modules/

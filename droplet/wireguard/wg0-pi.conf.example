@@ -1,0 +1,56 @@
+# =============================================================================
+# WireGuard CLIENT config for the Raspberry Pi (the chicken-cam).
+# Path on Pi: /etc/wireguard/wg0.conf  (chmod 600)
+# Enable with: sudo systemctl enable --now wg-quick@wg0
+#
+# This is the OUTBOUND side. The Pi connects to the droplet's PUBLIC IP on
+# UDP 51820. Nothing inbound is required on the home router.
+# =============================================================================
+
+[Interface]
+# Tunnel address of the Pi. /32: the Pi owns only its own tunnel IP; the single
+# peer (the droplet) is reached via AllowedIPs below.
+Address = 10.10.0.2/32
+
+# Pi private key (REPLACE with contents of pi_private.key).
+PrivateKey = REPLACE_WITH_PI_PRIVATE_KEY
+
+[Peer]
+# --- DigitalOcean droplet (public proxy) ---
+# Droplet public key (REPLACE with contents of server_public.key).
+PublicKey = REPLACE_WITH_SERVER_PUBLIC_KEY
+
+# Same PSK as on the server, if you enabled it.
+# PresharedKey = REPLACE_WITH_PRESHARED_KEY
+
+# Use the droplet's RESERVED IP (floating IP) so this never changes if you
+# rebuild the droplet.
+Endpoint = REPLACE_WITH_DROPLET_RESERVED_IP:51820
+
+# Only route the tunnel subnet through WireGuard. Do NOT set 0.0.0.0/0 here:
+# the Pi only needs to reach the droplet (10.10.0.1) to push RTSP, and the
+# rest of the home traffic should stay off the tunnel.
+AllowedIPs = 10.10.0.1/32
+
+# Keep the NAT hole open from behind the home router.
+PersistentKeepalive = 25
+
+# -----------------------------------------------------------------------------
+# Pi RTSP push (run continuously, e.g. via systemd or MediaMTX-rpicamera).
+# Push H.264 to the droplet over the tunnel. RTSP target = 10.10.0.1:8554.
+#
+# Example with ffmpeg from a libcamera/USB cam (adjust device + encoder):
+#   ffmpeg -f v4l2 -framerate 30 -video_size 1280x720 -i /dev/video0 \
+#     -c:v libx264 -preset ultrafast -tune zerolatency -b:v 2M -g 30 \
+#     -pix_fmt yuv420p -f rtsp -rtsp_transport tcp \
+#     rtsp://chickenpi:PUSH_PASSWORD@10.10.0.1:8554/coop
+#
+# Or run MediaMTX on the Pi with a path that publishes to the droplet:
+#   paths:
+#     coop:
+#       source: rpiCamera
+#       # rpiCamera options as needed (width, height, fps, bitrate)
+# and a second instance/forward, OR simplest: just ffmpeg push as above.
+# Credentials must match authInternalUsers (publish) in the droplet's
+# mediamtx.yml.
+# =============================================================================

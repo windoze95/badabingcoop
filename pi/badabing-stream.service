@@ -1,0 +1,80 @@
+# /etc/systemd/system/badabing-stream.service
+#
+# Bada Bing coop camera -> remote MediaMTX (RTSP push over WireGuard).
+#
+# Install:
+#   sudo cp pi/badabing-stream.service /etc/systemd/system/
+#   sudo cp pi/badabing-stream.sh      /usr/local/bin/  && sudo chmod +x /usr/local/bin/badabing-stream.sh
+#   sudo install -d /etc/badabing && sudo cp pi/badabing-stream.env /etc/badabing/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now badabing-stream.service
+#
+# Watch:  journalctl -u badabing-stream.service -f
+
+[Unit]
+Description=Bada Bing coop camera RTSP push to remote MediaMTX
+Documentation=https://mediamtx.org/docs/ https://www.raspberrypi.com/documentation/computers/camera_software.html
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+# Only run once the WireGuard tunnel that carries the stream is up.
+Requires=wg-quick@wg0.service
+
+# --- Restart rate-limiting (MUST live in [Unit], not [Service]) --------------
+# systemd >= 230 only reads StartLimitIntervalSec / StartLimitBurst from the
+# [Unit] section; in [Service] they are silently ignored. If it crashes >5
+# times in 60 s, stop and let a later boot / watchdog retry instead of pegging
+# the CPU (and burning solar power) on a dead camera.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/badabing/badabing-stream.env
+ExecStart=/usr/local/bin/badabing-stream.sh
+
+# --- Auto-reconnect on drop --------------------------------------------------
+# If rpicam-vid or ffmpeg exits for ANY reason (camera glitch, tunnel flap,
+# MediaMTX restart, network drop) the script exits and we relaunch.
+Restart=always
+# Backoff: wait 5 s between attempts so a hard failure (e.g. WG down) does not
+# busy-loop and waste solar power.
+RestartSec=5s
+# (StartLimitIntervalSec / StartLimitBurst moved to [Unit] above - they are
+#  ignored if placed here.)
+
+# Give the pipeline a moment to flush/close cleanly on stop.
+KillMode=mixed
+TimeoutStopSec=10
+
+# --- Low-power / hardening niceties ------------------------------------------
+# Slightly de-prioritise so the rest of the (tiny) system stays responsive;
+# encode is in hardware so this costs nothing on the video path.
+Nice=5
+# Light sandboxing - the streamer needs only the camera, network and its env.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# Camera + GPU access on Bookworm/libcamera: rpicam-vid needs the V4L2 capture
+# and H.264 M2M encoder nodes (/dev/video*), the media controller (/dev/media*),
+# DMA heaps (/dev/dma_heap/*), and the VideoCore mailbox (/dev/vchiq). With
+# ProtectSystem=strict + an explicit DeviceAllow list, ALL of these must be
+# whitelisted or rpicam-vid cannot reach the ISP/encoder and exits immediately.
+#
+# DeviceAllow takes a device-node PATH or a "char-<subsystem>"/"block-<subsystem>"
+# CLASS -- NOT a directory. The dma_heap nodes are /dev/dma_heap/system and
+# /dev/dma_heap/linux,cma; "DeviceAllow=/dev/dma_heap/ rw" (a trailing-slash
+# directory) matches NOTHING, so rpicam-vid dies with "Could not open any
+# dmaHeap device". Allow the whole dma_heap char subsystem by class instead.
+DeviceAllow=char-vchiq rw
+DeviceAllow=/dev/vchiq rw
+DeviceAllow=char-video4linux rw
+DeviceAllow=char-dma_heap rw
+DeviceAllow=char-media rw
+# (PrivateDevices is intentionally NOT set: it would hide /dev/video*, /dev/media*
+#  and /dev/dma_heap/* entirely. With it off, the nodes are visible and the
+#  DeviceAllow list above is what gates the cgroup device policy.)
+SupplementaryGroups=video render
+
+[Install]
+WantedBy=multi-user.target

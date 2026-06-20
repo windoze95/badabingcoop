@@ -1,0 +1,43 @@
+# /etc/systemd/system/badabing-nowplaying.service
+#
+# The "now playing" writer + on-track-change hook. Blocks on `mpc idle player`
+# and emits the current composer + piece to /run/badabing/nowplaying.{txt,json}
+# on every change. Restart=always so the file is always being kept fresh.
+#
+# Install:
+#   sudo cp pi/badabing-nowplaying.sh /usr/local/bin/ && sudo chmod +x /usr/local/bin/badabing-nowplaying.sh
+#   sudo cp pi/badabing-nowplaying.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now badabing-nowplaying.service
+#
+# Read it:  cat /run/badabing/nowplaying.txt
+#           jq . /run/badabing/nowplaying.json
+
+[Unit]
+Description=Bada Bing — now-playing writer (composer + piece -> /run/badabing)
+After=badabing-mpd.service
+Wants=badabing-mpd.service
+
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/badabing/badabing-music.env
+ExecStart=/usr/local/bin/badabing-nowplaying.sh
+
+Restart=always
+RestartSec=3s
+
+# /run/badabing on tmpfs (RAM): RuntimeDirectory creates it and tmpfs avoids SD
+# wear from writing every track. world-readable so overlay/web scripts can read.
+RuntimeDirectory=badabing
+RuntimeDirectoryMode=0755
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/run/badabing
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

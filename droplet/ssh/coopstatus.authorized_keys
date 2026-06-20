@@ -1,0 +1,45 @@
+# =============================================================================
+# authorized_keys for the RESTRICTED deploy account `coopstatus` on the droplet.
+# Path on droplet: /home/coopstatus/.ssh/authorized_keys   (mode 0600, owned by
+#                  coopstatus, inside a 0700 ~/.ssh, both owned by coopstatus)
+#
+# PURPOSE: let the coop Pi push status.json into ONE directory and nothing else.
+# Even if this private key leaks, the holder can do nothing but write files under
+# /var/www/badabing/api — no shell, no other paths, no deletes, no port-forward.
+#
+# HOW THE LOCK WORKS (confirmed against rrsync(1) / man7 + Debian manpages):
+#   * command="..."  forces THIS command for the key, ignoring whatever the
+#     client asked to run. rsync-over-ssh works by the client invoking
+#     `rsync --server ...` remotely; we replace that with rrsync, which:
+#       - takes a single argument: the ONE directory the key is confined to,
+#       - rewrites/validates every path so it stays inside that dir (rejects
+#         absolute paths and `..` traversal),
+#       - filters rsync's server options to a safe subset,
+#       - rejects --copy-links and -s/--secluded-args (which could smuggle
+#         unchecked options to the server side).
+#   * -wo  = write-only: the key may WRITE into the dir but not read it back.
+#            (Use -no-del belt-and-suspenders to also forbid --delete*/--remove*.
+#             -wo already does not need deletes for our single-file push.)
+#   * The restriction options DISABLE everything else on this connection:
+#       no-pty            : no terminal -> no interactive shell.
+#       no-agent-forwarding, no-port-forwarding, no-X11-forwarding : the key
+#                           cannot be turned into a tunnel/pivot into the host or
+#                           the rest of the network.
+#
+# rrsync location: Debian Bookworm / Ubuntu 22.04+ ship it at /usr/bin/rrsync
+# (Python version, from the `rsync` package). On a few older builds it lives at
+# /usr/share/doc/rsync/scripts/rrsync (sometimes .gz); if `which rrsync` is empty:
+#   sudo gunzip -k /usr/share/doc/rsync/scripts/rrsync.gz 2>/dev/null || true
+#   sudo install -m0755 /usr/share/doc/rsync/scripts/rrsync /usr/bin/rrsync
+# The setup script droplet/ssh/setup-coopstatus.sh handles this automatically.
+#
+# REACHABILITY: this account is only useful over the WireGuard tunnel. The Pi
+# connects to the droplet's wg0 address (10.10.0.1). Combined with the SSH
+# hardening drop-in (key-only, no passwords) and ufw allowing :22 only on wg0,
+# a leaked key is both path-locked AND network-locked.
+#
+# To install the Pi's PUBLIC key: replace the AAAA... blob below with the
+# contents of /etc/badabing/keys/coopstatus_ed25519.pub from the Pi.
+# =============================================================================
+
+command="/usr/bin/rrsync -wo -no-del /var/www/badabing/api",no-pty,no-agent-forwarding,no-port-forwarding,no-X11-forwarding ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAREPLACE_WITH_PI_coopstatus_ed25519.pub coopstatus@coop-pi

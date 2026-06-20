@@ -1,0 +1,186 @@
+# =============================================================================
+# MediaMTX configuration for the chicken-cam public proxy droplet.
+# Verified against MediaMTX v1.19.1 (June 2026) config schema.
+# Path on droplet: /usr/local/etc/mediamtx.yml
+#
+# Schema notes (keys HAVE changed across versions — these are the current ones):
+#   * rtspTransports   (was "protocols" in <=1.5)
+#   * hlsAllowOrigins  (was "hlsAllowOrigin", now a LIST)
+#   * webrtcAllowOrigins (was "webrtcAllowOrigin", now a LIST)
+#   * authInternalUsers + permissions[].action/.path (new internal auth model)
+#   * webrtcLocalUDPAddress (UDP media port, separate from HTTP signaling)
+#
+# Security model on THIS box:
+#   * RTSP listener is bound to the WireGuard IP 10.10.0.1 ONLY -> never public.
+#   * HLS (8888) and WebRTC signaling (8889) listen on 127.0.0.1 ONLY -> nginx
+#     terminates TLS and reverse-proxies to them. nginx is the ONLY public front
+#     door; viewers never reach MediaMTX directly.
+#   * WebRTC MEDIA travels over UDP 8189 directly to the droplet's public IP
+#     (this port IS opened in ufw; it carries SRTP, not credentials).
+#   * Publish (Pi) is authenticated by MediaMTX internal users over WireGuard --
+#     this is the ONLY authenticated party in the whole pipeline.
+#   * Read (public viewers) requires NO login: the VIEWER IS PUBLIC by design.
+#     nginx does NOT do Basic Auth, so MediaMTX allows anonymous read -- but
+#     ONLY from 127.0.0.1 (i.e. from nginx, the public front door), never from
+#     the open internet directly. See authInternalUsers below.
+# =============================================================================
+
+###############################################
+# Global / general settings
+logLevel: info
+logDestinations: [stdout]
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+udpMaxPayloadSize: 1452
+
+###############################################
+# Authentication
+authMethod: internal
+authInternalUsers:
+  # --- The Raspberry Pi: may PUBLISH the coop path, only from the
+  #     WireGuard subnet. Replace the password (or use a sha256:/argon2: hash).
+  #     Hash a password with:
+  #       echo -n 'PUSH_PASSWORD' | openssl dgst -binary -sha256 | openssl base64
+  #     then set pass: "sha256:<output>"
+  - user: chickenpi
+    pass: REPLACE_WITH_PI_PUBLISH_PASSWORD
+    ips: ["10.10.0.0/24"]
+    permissions:
+      - action: publish
+        path: coop
+
+  # --- Anonymous READ, but ONLY from localhost (i.e. from nginx). The viewer
+  #     is PUBLIC (no login) and the public never talks to MediaMTX directly;
+  #     nginx is the public front door and simply reverse-proxies these reads.
+  - user: any
+    pass:
+    ips: ["127.0.0.1", "::1"]
+    permissions:
+      - action: read
+        path: coop
+      - action: playback
+        path: coop
+
+  # --- Control API / metrics / pprof: localhost only.
+  - user: any
+    pass:
+    ips: ["127.0.0.1", "::1"]
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+###############################################
+# Control API (localhost only; used for health checks / automation)
+api: yes
+apiAddress: 127.0.0.1:9997
+
+###############################################
+# Metrics (Prometheus; localhost only)
+metrics: no
+metricsAddress: 127.0.0.1:9998
+
+###############################################
+# pprof (off in production)
+pprof: no
+
+###############################################
+# Playback server (off; we are not recording)
+playback: no
+
+###############################################
+# RTSP server -- INGEST FROM THE PI OVER WIREGUARD ONLY.
+rtsp: yes
+# Accept TCP (and UDP) only on the WireGuard interface address.
+rtspTransports: [tcp, udp]
+# Bind to the WireGuard IP so RTSP is NEVER reachable from the public internet.
+rtspAddress: 10.10.0.1:8554
+# RTP/RTCP UDP ranges also bound to the WireGuard IP.
+rtpAddress: 10.10.0.1:8000
+rtcpAddress: 10.10.0.1:8001
+# No TLS on RTSP: the WireGuard tunnel already encrypts everything.
+rtspEncryption: "no"
+rtspAuthMethods: [basic]
+
+###############################################
+# RTMP server (disabled -- not used)
+rtmp: no
+
+###############################################
+# HLS server -- low-latency, localhost only (nginx fronts it with TLS+auth).
+hls: yes
+hlsAddress: 127.0.0.1:8888
+# nginx terminates TLS; MediaMTX HLS stays plaintext on loopback.
+hlsEncryption: no
+hlsAllowOrigins: ["*"]
+# nginx is the trusted proxy so X-Forwarded-For is honored for auth/logging.
+hlsTrustedProxies: ["127.0.0.1/32", "::1/128"]
+# Low-latency HLS (LL-HLS) for the lowest practical latency over CDN-able HTTP.
+hlsVariant: lowLatency
+hlsAlwaysRemux: no
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
+# Only the coop path is exposed via HLS.
+hlsDirectory: ""
+
+###############################################
+# WebRTC server (WHEP read / WHIP publish) -- signaling on localhost only.
+webrtc: yes
+# HTTP signaling endpoint (POST .../whep, .../whip). nginx fronts this on 443.
+webrtcAddress: 127.0.0.1:8889
+# nginx terminates TLS; signaling plaintext on loopback.
+webrtcEncryption: no
+webrtcAllowOrigins: ["*"]
+webrtcTrustedProxies: ["127.0.0.1/32", "::1/128"]
+
+# --- WebRTC MEDIA transport (SRTP). This does NOT go through nginx; it flows
+#     directly between the browser and the droplet's public IP over UDP 8189.
+#     This port MUST be open in ufw (it is).
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: ""
+
+# Do NOT auto-advertise the droplet's private/eth IPs as ICE candidates;
+# advertise the public reserved IP explicitly so browsers can reach the media.
+webrtcIPsFromInterfaces: no
+# CRITICAL: put the droplet's PUBLIC reserved IP here (an IP, not a DNS name --
+# DNS names break ICE on Firefox). Replace the placeholder.
+webrtcAdditionalHosts: ["REPLACE_WITH_DROPLET_RESERVED_IP"]
+
+# Optional STUN/TURN for viewers behind symmetric NAT. A public STUN is enough
+# for most home/mobile networks; add a TURN server if you need 100% reach.
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+    username: ""
+    password: ""
+    clientOnly: false
+
+###############################################
+# SRT server (disabled -- not used)
+srt: no
+
+###############################################
+# Paths
+pathDefaults:
+  source: publisher
+  sourceOnDemand: no
+  record: no
+
+paths:
+  # The single chicken-cam stream. The Pi PUBLISHES here over WireGuard
+  # (rtsp://chickenpi:...@10.10.0.1:8554/coop). Viewers read it as:
+  #   WebRTC/WHEP:  https://cam.example.com/coop/whep
+  #   LL-HLS:       https://cam.example.com/coop/index.m3u8
+  coop:
+    source: publisher
+    # Keep the stream alive so HLS muxer is ready when a viewer arrives.
+    sourceOnDemand: no
+    # Run a hook on (dis)connect if you want notifications (optional):
+    # runOnReady: ...
+    # runOnNotReady: ...
+
+  # Block everything else: no other path may be published or read.
+  # (Absence of a path + the per-path permissions above already restrict this,
+  #  but be explicit about the deny-by-default posture.)

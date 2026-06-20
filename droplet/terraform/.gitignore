@@ -1,0 +1,17 @@
+# Terraform state + secrets -- never commit.
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform/
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# WireGuard keys if generated in this dir.
+*.key
+server_public.key
+pi_public.key

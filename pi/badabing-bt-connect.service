@@ -1,0 +1,47 @@
+# /etc/systemd/system/badabing-bt-connect.service
+#
+# Keep the paired+trusted Bluetooth speaker connected on boot and after any drop.
+# This is the AUTO-RECONNECT unit. Pair/trust ONCE first with badabing-bt-setup.sh.
+#
+# Install:
+#   sudo cp pi/badabing-bt-connect.sh  /usr/local/bin/ && sudo chmod +x /usr/local/bin/badabing-bt-connect.sh
+#   sudo cp pi/badabing-bt-connect.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now badabing-bt-connect.service
+#
+# Watch:  journalctl -u badabing-bt-connect.service -f
+
+[Unit]
+Description=Bada Bing — auto-(re)connect the Bluetooth speaker
+Documentation=https://github.com/raspberrypi/linux/issues/5293
+# bluetooth.service owns the controllers; we must come up after it. (If
+# badabing-power-tune masked bluetooth, unmask+enable it — see badabing-bt-setup.sh.)
+After=bluetooth.service
+Wants=bluetooth.service
+# A USB Bluetooth dongle (the recommended coexistence fix) may enumerate slightly
+# after boot; give the stack time rather than racing it. We also retry in-script.
+
+# Restart rate-limiting lives in [Unit] (systemd ignores it in [Service]).
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/badabing/badabing-music.env
+# Small startup delay so the controller (esp. a USB dongle) is enumerated and
+# bluetoothd has populated the adapter before we issue connect.
+ExecStartPre=/bin/sleep 5
+ExecStart=/usr/local/bin/badabing-bt-connect.sh
+
+# Auto-reconnect on drop: if the script itself ever exits, relaunch it. (The
+# script ALSO loops internally to reconnect the speaker without dying, so this
+# Restart mainly covers crashes / OOM / manual kills.)
+Restart=always
+RestartSec=10s
+
+# Low-power niceties: this is a slow polling loop, keep it out of the way.
+Nice=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

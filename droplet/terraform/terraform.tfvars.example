@@ -1,0 +1,33 @@
+# =============================================================================
+# Copy to terraform.tfvars (gitignored) and fill in. Or export TF_VAR_* env
+# vars. NEVER commit real keys/passwords.
+#
+# Generate WireGuard keys first:
+#   wg genkey | tee server_private.key | wg pubkey > server_public.key
+#   wg genkey | tee pi_private.key     | wg pubkey > pi_public.key
+# server_private.key -> wg_server_private_key (this droplet)
+# pi_public.key      -> wg_pi_public_key      (the Pi peer)
+# =============================================================================
+
+do_token = "dop_v1_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+region       = "nyc3"
+droplet_size = "s-1vcpu-1gb"
+droplet_name = "chickencam-proxy"
+
+# SSH keys already in your DO account (doctl compute ssh-key list).
+ssh_key_fingerprints = ["aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"]
+# Same key's PUBLIC contents, injected into cloud-init.
+ssh_public_key = "ssh-ed25519 AAAAC3Nza... you@laptop"
+
+admin_email = "you@example.com"
+domain      = "cam.example.com"
+
+# NOTE: no viewer_password -- the viewer is public (no login) by design.
+
+wg_server_private_key = "PASTE_server_private.key_CONTENTS"
+wg_pi_public_key      = "PASTE_pi_public.key_CONTENTS"
+pi_publish_password   = "change-me-strong-publish-password"
+
+# Lock SSH to your IP(s) for real security:
+# ssh_admin_source_addresses = ["203.0.113.7/32"]

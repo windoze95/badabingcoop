@@ -1,0 +1,78 @@
+# /etc/systemd/system/badabing-mpd.service
+#
+# The MUSIC PLAYER unit: runs MPD with our config, outputting to PipeWire (Pulse
+# compat) -> the Bluetooth A2DP speaker (the current default sink). Restart=always
+# so the player is never down on an unattended box.
+#
+# NOTE on the stock mpd.service: Debian's `mpd` package ships its own
+# /lib/systemd/system/mpd.service (+ mpd.socket). You have two options:
+#   (A) Use THIS unit and disable the stock one:
+#         sudo systemctl disable --now mpd.service mpd.socket
+#         sudo systemctl daemon-reload
+#         sudo systemctl enable --now badabing-mpd.service
+#   (B) Or just use the stock mpd.service with our /etc/mpd.conf and skip this
+#       file. This unit exists so the player matches the rest of the badabing
+#       stack (Restart=always, the PipeWire env, hardening) in one place.
+#
+# Install:
+#   sudo cp pi/mpd.conf /etc/mpd.conf
+#   sudo cp pi/badabing-mpd.service /etc/systemd/system/
+#   sudo install -d -o mpd -g audio /srv/badabing/music /srv/badabing/playlists
+#   sudo systemctl daemon-reload && sudo systemctl enable --now badabing-mpd.service
+#
+# Watch:  journalctl -u badabing-mpd.service -f
+
+[Unit]
+Description=Bada Bing — MPD music player (shuffled classical to Bluetooth A2DP)
+Documentation=https://mpd.readthedocs.io/
+# We want audio routed before/while we play, but we do NOT hard-require the
+# speaker to be connected to START — MPD can buffer and PipeWire will move the
+# stream onto the A2DP sink when it appears (badabing-audio-route handles that).
+After=network.target sound.target badabing-pipewire.service badabing-pipewire-pulse.service badabing-bt-connect.service
+Wants=badabing-pipewire.service badabing-pipewire-pulse.service
+# If you run PipeWire as a normal user session instead of the system service,
+# drop badabing-pipewire.service here and start MPD after that session.
+
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=notify
+EnvironmentFile=/etc/badabing/badabing-music.env
+# Point MPD's Pulse output at the SYSTEM pipewire-pulse instance (headless
+# pattern). If you instead run PipeWire in a user session, set these to that
+# user's /run/user/<uid> paths.
+Environment=XDG_RUNTIME_DIR=/run/pipewire
+Environment=PULSE_RUNTIME_PATH=/run/pulse
+Environment=PULSE_SERVER=unix:/run/pulse/native
+
+# --no-daemon: run in the foreground so systemd supervises it directly.
+ExecStart=/usr/bin/mpd --no-daemon /etc/mpd.conf
+
+# Player must never stay down.
+Restart=always
+RestartSec=5s
+
+# mpd user/groups: 'audio' for the device, and it needs to reach the pipewire
+# pulse socket — easiest is to add mpd to the 'pipewire' group in the system
+# setup (see badabing-pipewire-system.md), granted here as a supplementary group.
+User=mpd
+Group=audio
+SupplementaryGroups=audio pipewire
+
+# Light hardening (MPD only needs its library, db/state dirs, and the audio
+# socket). RuntimeDirectory gives it /run/mpd for the pid + control socket.
+RuntimeDirectory=mpd
+RuntimeDirectoryMode=0755
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+# MPD must write its db/state/log and read the library; whitelist those paths.
+ReadWritePaths=/var/lib/mpd /var/log/mpd /srv/badabing
+# And reach the audio runtime sockets.
+ReadWritePaths=/run/pipewire /run/pulse
+Nice=5
+
+[Install]
+WantedBy=multi-user.target
